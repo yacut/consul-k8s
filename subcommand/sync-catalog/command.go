@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/consul-k8s/subcommand"
 	k8sflags "github.com/hashicorp/consul-k8s/subcommand/flags"
 	"github.com/hashicorp/consul/command/flags"
-	"github.com/hashicorp/go-hclog"
+	hclog "github.com/hashicorp/go-hclog"
 	"github.com/mitchellh/cli"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -39,6 +39,7 @@ type Command struct {
 	flagK8SWriteNamespace     string
 	flagConsulWritePeriod     flags.DurationValue
 	flagSyncClusterIPServices bool
+	flagPreferWanAddress      bool
 
 	once sync.Once
 	help string
@@ -73,6 +74,8 @@ func (c *Command) init() {
 	c.flags.BoolVar(&c.flagSyncClusterIPServices, "sync-clusterip-services", true,
 		"If true, all valid ClusterIP services in K8S are synced by default. If false, "+
 			"ClusterIP services are not synced to Consul.")
+	c.flags.BoolVar(&c.flagPreferWanAddress, "prefer-wan-address", false,
+		"If set to true, NodePort-type services are synced for each k8s node ip.")
 
 	c.http = &flags.HTTPFlags{}
 	c.k8s = &k8sflags.K8SFlags{}
@@ -136,12 +139,13 @@ func (c *Command) Run(args []string) int {
 		ctl := &controller.Controller{
 			Log: hclog.Default().Named("to-consul/controller"),
 			Resource: &catalogFromK8S.ServiceResource{
-				Log:            hclog.Default().Named("to-consul/source"),
-				Client:         clientset,
-				Syncer:         syncer,
-				Namespace:      c.flagK8SSourceNamespace,
-				ExplicitEnable: !c.flagK8SDefault,
-				ClusterIPSync:  c.flagSyncClusterIPServices,
+				Log:              hclog.Default().Named("to-consul/source"),
+				Client:           clientset,
+				Syncer:           syncer,
+				Namespace:        c.flagK8SSourceNamespace,
+				ExplicitEnable:   !c.flagK8SDefault,
+				ClusterIPSync:    c.flagSyncClusterIPServices,
+				PreferWanAddress: c.flagPreferWanAddress,
 			},
 		}
 

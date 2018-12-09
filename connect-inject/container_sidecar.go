@@ -14,7 +14,8 @@ func (h *Handler) containerSidecar(pod *corev1.Pod) corev1.Container {
 	data := initContainerCommandData{
 		PreferWanAddress: h.PreferWanAddress,
 	}
-	return corev1.Container{
+
+	container := corev1.Container{
 		Name:  "consul-connect-envoy-sidecar",
 		Image: h.ImageEnvoy,
 		Env: []corev1.EnvVar{
@@ -31,7 +32,14 @@ func (h *Handler) containerSidecar(pod *corev1.Pod) corev1.Container {
 				MountPath: "/consul/connect-inject",
 			},
 		},
-		Lifecycle: &corev1.Lifecycle{
+		Command: []string{
+			"envoy",
+			"--config-path", "/consul/connect-inject/envoy-bootstrap.yaml",
+		},
+	}
+
+	if !data.PreferWanAddress {
+		container.Lifecycle = &corev1.Lifecycle{
 			PreStop: &corev1.Handler{
 				Exec: &corev1.ExecAction{
 					Command: []string{
@@ -41,12 +49,9 @@ func (h *Handler) containerSidecar(pod *corev1.Pod) corev1.Container {
 					},
 				},
 			},
-		},
-		Command: []string{
-			"envoy",
-			"--config-path", "/consul/connect-inject/envoy-bootstrap.yaml",
-		},
+		}
 	}
+	return container
 }
 
 const sidecarPreStopCommand = `

@@ -359,36 +359,43 @@ func (t *ServiceResource) generateRegistrations(key string) {
 	// node as part of the service.
 	// If prefer-wan-address is set to true, we create a service instance for each K8S node.
 	case apiv1.ServiceTypeNodePort, apiv1.ServiceTypeClusterIP:
-		if t.endpointsMap == nil {
-			return
-		}
-
-		endpoints := t.endpointsMap[key]
-		if endpoints == nil {
-			return
-		}
-
 		if t.PreferWanAddress {
-			for _, nodeAddress := range nodes.Status.Addresses {
-				if nodeAddress.type != "InternalIP" {
-					continue
+			nodes, err := t.Client.CoreV1().Nodes().List(metav1.ListOptions{})
+			if err != nil {
+				t.Log.Warn("error loading k8s nodes", "err", err)
+			}
+			seen := map[string]struct{}{}
+			for _, node := range nodes.Items {
+				for _, nodeAddress := range node.Status.Addresses {
+					if nodeAddress.Type != apiv1.NodeInternalIP {
+						continue
+					}
+
+					addr := nodeAddress.Address
+
+					if _, ok := seen[addr]; ok {
+						continue
+					}
+					seen[addr] = struct{}{}
+
+					r := baseNode
+					rs := baseService
+					r.Service = &rs
+					r.Service.ID = serviceID(r.Service.Service, addr)
+					r.Service.Address = addr
+					t.consulMap[key] = append(t.consulMap[key], &r)
 				}
-
-				addr := nodeAddress.address
-
-				if _, ok := seen[addr]; ok {
-					continue
-				}
-				seen[addr] = struct{}{}
-
-				r := baseNode
-				rs := baseService
-				r.Service = &rs
-				r.Service.ID = serviceID(r.Service.Service, addr)
-				r.Service.Address = addr
-				t.consulMap[key] = append(t.consulMap[key], &r)
 			}
 		} else {
+			if t.endpointsMap == nil {
+				return
+			}
+
+			endpoints := t.endpointsMap[key]
+			if endpoints == nil {
+				return
+			}
+
 			seen := map[string]struct{}{}
 			for _, subset := range endpoints.Subsets {
 				for _, subsetAddr := range subset.Addresses {
