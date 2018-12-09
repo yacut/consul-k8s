@@ -80,6 +80,7 @@ type Handler struct {
 	ConsulTLSServerName string
 	ConsulHTTPSSL       bool
 	ConsulGRPCSSL       bool
+	PreferWanAddress    bool
 }
 
 // Handle is the http.HandlerFunc implementation that actually handles the

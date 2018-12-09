@@ -10,14 +10,16 @@ import (
 )
 
 type sidecarContainerCommandData struct {
-	HttpTLS       bool
-	TLSServerName string
+	HttpTLS          bool
+	TLSServerName    string
+	PreferWanAddress bool
 }
 
 func (h *Handler) containerSidecar(pod *corev1.Pod) (corev1.Container, error) {
 	data := sidecarContainerCommandData{
-		HttpTLS:       h.ConsulHTTPSSL,
-		TLSServerName: h.ConsulTLSServerName,
+		HttpTLS:          h.ConsulHTTPSSL,
+		TLSServerName:    h.ConsulTLSServerName,
+		PreferWanAddress: h.PreferWanAddress,
 	}
 
 	volumeMounts := []corev1.VolumeMount{
@@ -74,10 +76,12 @@ func (h *Handler) containerSidecar(pod *corev1.Pod) (corev1.Container, error) {
 }
 
 const sidecarPreStopCommandTpl = `
+{{ if not .PreferWanAddress -}}
 export CONSUL_HTTP_ADDR="{{ if .HttpTLS -}}https://{{ end -}}${HOST_IP}:8500"
 {{ if .TLSServerName -}}
 export CONSUL_TLS_SERVER_NAME="{{ .TLSServerName }}"
 {{ end -}}
 /consul/connect-inject/consul services deregister \
   /consul/connect-inject/service.hcl
+{{ end -}}
 `

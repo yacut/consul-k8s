@@ -38,6 +38,7 @@ type Command struct {
 	flagTLSServerName string // SNI hostname for Consul auth
 	flagConsulHTTPSSL bool   // Enable TLS for Consul http
 	flagConsulGRPCSSL bool   // Enable TLS for Consul grpc
+	flagPreferWanAddress bool   // True to inject by default
 	flagSet           *flag.FlagSet
 
 	once sync.Once
@@ -69,6 +70,8 @@ func (c *Command) init() {
 		"Whether or not to enable TLS for Consul communication over HTTP.")
 	c.flagSet.BoolVar(&c.flagConsulGRPCSSL, "consul-grpc-ssl", false,
 		"Whether or not to enable TLS for Consul communication over GRPC.")
+	c.flagSet.BoolVar(&c.flagPreferWanAddress, "prefer-wan-address", false,
+		"If set to true, sidecar will not register service with pod ip address.")
 	c.help = flags.Usage(help, c.flagSet)
 }
 
@@ -121,6 +124,7 @@ func (c *Command) Run(args []string) int {
 		ConsulTLSServerName: c.flagTLSServerName,
 		ConsulHTTPSSL:       c.flagConsulHTTPSSL,
 		ConsulGRPCSSL:       c.flagConsulGRPCSSL,
+		PreferWanAddress:  c.flagPreferWanAddress,
 	}
 
 	mux := http.NewServeMux()
