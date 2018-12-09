@@ -9,10 +9,11 @@ import (
 )
 
 type initContainerCommandData struct {
-	PodName     string
-	ServiceName string
-	ServicePort int32
-	Upstreams   []initContainerCommandUpstreamData
+	PodName          string
+	ServiceName      string
+	ServicePort      int32
+	Upstreams        []initContainerCommandUpstreamData
+	PreferWanAddress bool
 }
 
 type initContainerCommandUpstreamData struct {
@@ -24,8 +25,9 @@ type initContainerCommandUpstreamData struct {
 // service, setting up the Envoy bootstrap, etc.
 func (h *Handler) containerInit(pod *corev1.Pod) (corev1.Container, error) {
 	data := initContainerCommandData{
-		PodName:     pod.Name,
-		ServiceName: pod.Annotations[annotationService],
+		PodName:          pod.Name,
+		ServiceName:      pod.Annotations[annotationService],
+		PreferWanAddress: h.PreferWanAddress,
 	}
 	if data.ServiceName == "" {
 		// Assertion, since we call defaultAnnotations above and do
@@ -97,6 +99,7 @@ const initContainerCommandTpl = `
 export CONSUL_HTTP_ADDR="${HOST_IP}:8500"
 export CONSUL_GRPC_ADDR="${HOST_IP}:8502"
 
+{{ if not .PreferWanAddress -}}
 # Register the service. The HCL is stored in the volume so that
 # the preStop hook can access it to deregister the service.
 cat <<EOF >/consul/connect-inject/service.hcl
@@ -139,6 +142,7 @@ services {
 EOF
 
 /bin/consul services register /consul/connect-inject/service.hcl
+{{ end -}}
 
 # Generate the envoy bootstrap code
 /bin/consul connect envoy \

@@ -47,6 +47,10 @@ type ServiceResource struct {
 	// Setting this to false will ignore ClusterIP services during the sync.
 	ClusterIPSync bool
 
+	// PreferWanAddress set to false (default) syncs NodePort-type service with endrypoint.
+	// Setting this to true syncs NodePort-type service for each k8s node.
+	PreferWanAddress bool
+
 	// serviceMap is a mapping of unique key (given by controller) to
 	// the service structure. endpointsMap is the mapping of the same
 	// uniqueKey to a set of endpoints.
@@ -349,9 +353,11 @@ func (t *ServiceResource) generateRegistrations(key string) {
 			t.consulMap[key] = append(t.consulMap[key], &r)
 		}
 
-	// For NodePort services, we create a service instance for each
+	// For NodePort services
+	// If prefer-wan-address is set to false, we create a service instance for each
 	// endpoint of the service. This way we don't register _every_ K8S
 	// node as part of the service.
+	// If prefer-wan-address is set to true, we create a service instance for each K8S node.
 	case apiv1.ServiceTypeNodePort, apiv1.ServiceTypeClusterIP:
 		if t.endpointsMap == nil {
 			return
@@ -362,20 +368,14 @@ func (t *ServiceResource) generateRegistrations(key string) {
 			return
 		}
 
-		seen := map[string]struct{}{}
-		for _, subset := range endpoints.Subsets {
-			for _, subsetAddr := range subset.Addresses {
-				addr := subsetAddr.IP
-				if addr == "" {
-					addr = subsetAddr.Hostname
-				}
-				if addr == "" {
+		if t.PreferWanAddress {
+			for _, nodeAddress := range nodes.Status.Addresses {
+				if nodeAddress.type != "InternalIP" {
 					continue
 				}
 
-				// Its not clear whether K8S guarantees ready addresses to
-				// be unique so we maintain a set to prevent duplicates just
-				// in case.
+				addr := nodeAddress.address
+
 				if _, ok := seen[addr]; ok {
 					continue
 				}
@@ -386,12 +386,40 @@ func (t *ServiceResource) generateRegistrations(key string) {
 				r.Service = &rs
 				r.Service.ID = serviceID(r.Service.Service, addr)
 				r.Service.Address = addr
-				if subsetAddr.NodeName != nil {
-					r.Node = *subsetAddr.NodeName
-					r.Address = addr
-				}
-
 				t.consulMap[key] = append(t.consulMap[key], &r)
+			}
+		} else {
+			seen := map[string]struct{}{}
+			for _, subset := range endpoints.Subsets {
+				for _, subsetAddr := range subset.Addresses {
+					addr := subsetAddr.IP
+					if addr == "" {
+						addr = subsetAddr.Hostname
+					}
+					if addr == "" {
+						continue
+					}
+
+					// Its not clear whether K8S guarantees ready addresses to
+					// be unique so we maintain a set to prevent duplicates just
+					// in case.
+					if _, ok := seen[addr]; ok {
+						continue
+					}
+					seen[addr] = struct{}{}
+
+					r := baseNode
+					rs := baseService
+					r.Service = &rs
+					r.Service.ID = serviceID(r.Service.Service, addr)
+					r.Service.Address = addr
+					if subsetAddr.NodeName != nil {
+						r.Node = *subsetAddr.NodeName
+						r.Address = addr
+					}
+
+					t.consulMap[key] = append(t.consulMap[key], &r)
+				}
 			}
 		}
 	}

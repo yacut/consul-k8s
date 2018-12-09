@@ -6,7 +6,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+type sidecarContainerCommandData struct {
+	PreferWanAddress bool
+}
+
 func (h *Handler) containerSidecar(pod *corev1.Pod) corev1.Container {
+	data := initContainerCommandData{
+		PreferWanAddress: h.PreferWanAddress,
+	}
 	return corev1.Container{
 		Name:  "consul-connect-envoy-sidecar",
 		Image: h.ImageEnvoy,
@@ -43,7 +50,9 @@ func (h *Handler) containerSidecar(pod *corev1.Pod) corev1.Container {
 }
 
 const sidecarPreStopCommand = `
+{{ if not .PreferWanAddress -}}
 export CONSUL_HTTP_ADDR="${HOST_IP}:8500"
 /consul/connect-inject/consul services deregister \
   /consul/connect-inject/service.hcl
+{{ end -}}
 `

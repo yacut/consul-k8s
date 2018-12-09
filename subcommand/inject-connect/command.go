@@ -34,6 +34,7 @@ type Command struct {
 	flagDefaultInject bool   // True to inject by default
 	flagConsulImage   string // Docker image for Consul
 	flagEnvoyImage    string // Docker image for Envoy
+	flagPreferWanAddress bool   // True to inject by default
 	flagSet           *flag.FlagSet
 
 	once sync.Once
@@ -57,6 +58,8 @@ func (c *Command) init() {
 		"Docker image for Consul. Defaults to an Consul 1.3.0.")
 	c.flagSet.StringVar(&c.flagEnvoyImage, "envoy-image", connectinject.DefaultEnvoyImage,
 		"Docker image for Envoy. Defaults to Envoy 1.8.0.")
+	c.flagSet.BoolVar(&c.flagPreferWanAddress, "prefer-wan-address", false,
+		"If set to true, sidecar will not register service with pod ip address.")
 	c.help = flags.Usage(help, c.flagSet)
 }
 
@@ -105,6 +108,7 @@ func (c *Command) Run(args []string) int {
 		ImageConsul:       c.flagConsulImage,
 		ImageEnvoy:        c.flagEnvoyImage,
 		RequireAnnotation: !c.flagDefaultInject,
+		PreferWanAddress:  c.flagPreferWanAddress,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mutate", injector.Handle)
