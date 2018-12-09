@@ -34,6 +34,10 @@ type Command struct {
 	flagDefaultInject bool   // True to inject by default
 	flagConsulImage   string // Docker image for Consul
 	flagEnvoyImage    string // Docker image for Envoy
+	flagCACert        string // Secret and mount path holding Consul CA for auth
+	flagTLSServerName string // SNI hostname for Consul auth
+	flagConsulHTTPSSL bool   // Enable TLS for Consul http
+	flagConsulGRPCSSL bool   // Enable TLS for Consul grpc
 	flagSet           *flag.FlagSet
 
 	once sync.Once
@@ -57,6 +61,14 @@ func (c *Command) init() {
 		"Docker image for Consul. Defaults to an Consul 1.3.0.")
 	c.flagSet.StringVar(&c.flagEnvoyImage, "envoy-image", connectinject.DefaultEnvoyImage,
 		"Docker image for Envoy. Defaults to Envoy 1.8.0.")
+	c.flagSet.StringVar(&c.flagCACert, "consul-cacert", "",
+		"Kubernetes secret name and mount path for the CA certificate to use for Consul communication.")
+	c.flagSet.StringVar(&c.flagTLSServerName, "consul-tls-server-name", "",
+		"SNI hostname to use for Consul communication over TLS.")
+	c.flagSet.BoolVar(&c.flagConsulHTTPSSL, "consul-http-ssl", false,
+		"Whether or not to enable TLS for Consul communication over HTTP.")
+	c.flagSet.BoolVar(&c.flagConsulGRPCSSL, "consul-grpc-ssl", false,
+		"Whether or not to enable TLS for Consul communication over GRPC.")
 	c.help = flags.Usage(help, c.flagSet)
 }
 
@@ -102,10 +114,15 @@ func (c *Command) Run(args []string) int {
 
 	// Build the HTTP handler and server
 	injector := connectinject.Handler{
-		ImageConsul:       c.flagConsulImage,
-		ImageEnvoy:        c.flagEnvoyImage,
-		RequireAnnotation: !c.flagDefaultInject,
+		ImageConsul:         c.flagConsulImage,
+		ImageEnvoy:          c.flagEnvoyImage,
+		RequireAnnotation:   !c.flagDefaultInject,
+		ConsulCACert:        c.flagCACert,
+		ConsulTLSServerName: c.flagTLSServerName,
+		ConsulHTTPSSL:       c.flagConsulHTTPSSL,
+		ConsulGRPCSSL:       c.flagConsulGRPCSSL,
 	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mutate", injector.Handle)
 	mux.HandleFunc("/health/ready", c.handleReady)

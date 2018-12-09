@@ -2,6 +2,7 @@ package connectinject
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -9,10 +10,13 @@ import (
 )
 
 type initContainerCommandData struct {
-	PodName     string
-	ServiceName string
-	ServicePort int32
-	Upstreams   []initContainerCommandUpstreamData
+	PodName       string
+	ServiceName   string
+	ServicePort   int32
+	Upstreams     []initContainerCommandUpstreamData
+	HttpTLS       bool
+	GrpcTLS       bool
+	TLSServerName string
 }
 
 type initContainerCommandUpstreamData struct {
@@ -24,8 +28,11 @@ type initContainerCommandUpstreamData struct {
 // service, setting up the Envoy bootstrap, etc.
 func (h *Handler) containerInit(pod *corev1.Pod) (corev1.Container, error) {
 	data := initContainerCommandData{
-		PodName:     pod.Name,
-		ServiceName: pod.Annotations[annotationService],
+		PodName:       pod.Name,
+		ServiceName:   pod.Annotations[annotationService],
+		HttpTLS:       h.ConsulHTTPSSL,
+		GrpcTLS:       h.ConsulGRPCSSL,
+		TLSServerName: h.ConsulTLSServerName,
 	}
 	if data.ServiceName == "" {
 		// Assertion, since we call defaultAnnotations above and do
@@ -57,45 +64,61 @@ func (h *Handler) containerInit(pod *corev1.Pod) (corev1.Container, error) {
 
 	// Render the command
 	var buf bytes.Buffer
-	tpl := template.Must(template.New("root").Parse(strings.TrimSpace(
-		initContainerCommandTpl)))
-	err := tpl.Execute(&buf, &data)
-	if err != nil {
+	tpl := template.Must(template.New("root").Parse(strings.TrimSpace(initContainerCommandTpl)))
+	if err := tpl.Execute(&buf, &data); err != nil {
 		return corev1.Container{}, err
 	}
 
+	volumeMounts := []corev1.VolumeMount{
+		corev1.VolumeMount{
+			Name:      volumeName,
+			MountPath: "/consul/connect-inject",
+		},
+	}
+
+	env := []corev1.EnvVar{
+		{
+			Name: "HOST_IP",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
+			},
+		},
+		{
+			Name: "POD_IP",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+			},
+		},
+	}
+
+	if parts := strings.SplitN(h.ConsulCACert, ":", 2); len(parts) == 2 {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      volumeNameCA,
+			MountPath: filepath.Dir(parts[1]),
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  "CONSUL_CACERT",
+			Value: parts[1],
+		})
+	}
+
 	return corev1.Container{
-		Name:  "consul-connect-inject-init",
-		Image: h.ImageConsul,
-		Env: []corev1.EnvVar{
-			{
-				Name: "HOST_IP",
-				ValueFrom: &corev1.EnvVarSource{
-					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
-				},
-			},
-			{
-				Name: "POD_IP",
-				ValueFrom: &corev1.EnvVarSource{
-					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
-				},
-			},
-		},
-		VolumeMounts: []corev1.VolumeMount{
-			corev1.VolumeMount{
-				Name:      volumeName,
-				MountPath: "/consul/connect-inject",
-			},
-		},
-		Command: []string{"/bin/sh", "-ec", buf.String()},
+		Name:         "consul-connect-inject-init",
+		Image:        h.ImageConsul,
+		Env:          env,
+		VolumeMounts: volumeMounts,
+		Command:      []string{"/bin/sh", "-ec", buf.String()},
 	}, nil
 }
 
 // initContainerCommandTpl is the template for the command executed by
 // the init container.
 const initContainerCommandTpl = `
-export CONSUL_HTTP_ADDR="${HOST_IP}:8500"
-export CONSUL_GRPC_ADDR="${HOST_IP}:8502"
+export CONSUL_HTTP_ADDR="{{ if .HttpTLS -}}https://{{ end -}}${HOST_IP}:8500"
+export CONSUL_GRPC_ADDR="{{ if .GrpcTLS -}}https://{{ end -}}${HOST_IP}:8502"
+{{ if .TLSServerName -}}
+export CONSUL_TLS_SERVER_NAME="{{ .TLSServerName }}"
+{{ end -}}
 
 # Register the service. The HCL is stored in the volume so that
 # the preStop hook can access it to deregister the service.

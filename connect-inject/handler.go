@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/mattbaird/jsonpatch"
 	"k8s.io/api/admission/v1beta1"
@@ -71,6 +72,14 @@ type Handler struct {
 	// RequireAnnotation means that the annotation must be given to inject.
 	// If this is false, injection is default.
 	RequireAnnotation bool
+
+	// Various options for communicating with Consul over HTTP/GRPC. If TLS
+	// is enabled in your cluster, then you will most likely need to also
+	// inject a CA and configure the client.
+	ConsulCACert        string
+	ConsulTLSServerName string
+	ConsulHTTPSSL       bool
+	ConsulGRPCSSL       bool
 }
 
 // Handle is the http.HandlerFunc implementation that actually handles the
@@ -163,12 +172,17 @@ func (h *Handler) Mutate(req *v1beta1.AdmissionRequest) *v1beta1.AdmissionRespon
 	// Accumulate any patches here
 	var patches []jsonpatch.JsonPatchOperation
 
-	// Add our volume that will be shared by the init container and
-	// the sidecar for passing data in the pod.
-	patches = append(patches, addVolume(
-		pod.Spec.Volumes,
-		[]corev1.Volume{h.containerVolume()},
-		"/spec/volumes")...)
+	// Add our volume(s) that will be shared by the init container and
+	// the sidecar for passing data in the pod. This list of volumes may also
+	// contain a volume for the CA certificate used in Consul communication.
+	var volumes []corev1.Volume
+	volumes = append(volumes, h.containerVolume())
+
+	if parts := strings.SplitN(h.ConsulCACert, ":", 2); len(parts) == 2 {
+		volumes = append(volumes, h.containerVolumeCA())
+	}
+
+	patches = append(patches, addVolume(pod.Spec.Volumes, volumes, "/spec/volumes")...)
 
 	// Add the upstream services as environment variables for easy
 	// service discovery.
@@ -201,9 +215,17 @@ func (h *Handler) Mutate(req *v1beta1.AdmissionRequest) *v1beta1.AdmissionRespon
 		"/spec/initContainers")...)
 
 	// Add the Envoy sidecar
+	container, err = h.containerSidecar(&pod)
+	if err != nil {
+		return &v1beta1.AdmissionResponse{
+			Result: &metav1.Status{
+				Message: fmt.Sprintf("Error configuring injection sidecar container: %s", err),
+			},
+		}
+	}
 	patches = append(patches, addContainer(
 		pod.Spec.Containers,
-		[]corev1.Container{h.containerSidecar(&pod)},
+		[]corev1.Container{container},
 		"/spec/containers")...)
 
 	// Add annotations so that we know we're injected
@@ -279,11 +301,7 @@ func (h *Handler) defaultAnnotations(pod *corev1.Pod) error {
 	if _, ok := pod.ObjectMeta.Annotations[annotationPort]; !ok {
 		if cs := pod.Spec.Containers; len(cs) > 0 {
 			if ps := cs[0].Ports; len(ps) > 0 {
-				if ps[0].Name != "" {
-					pod.ObjectMeta.Annotations[annotationPort] = ps[0].Name
-				} else {
-					pod.ObjectMeta.Annotations[annotationPort] = strconv.Itoa(int(ps[0].ContainerPort))
-				}
+				pod.ObjectMeta.Annotations[annotationPort] = ps[0].Name
 			}
 		}
 	}
